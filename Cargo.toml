@@ -1,0 +1,17 @@
+[package]
+name = "prime_race_rust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+num_cpus = "1.13"
+structopt = "0.3"
+rayon = "1.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
