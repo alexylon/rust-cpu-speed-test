@@ -1,12 +1,16 @@
 use primes::{
-    print_results_stderr, report_results_stdout, FlagStorage, FlagStorageBitVector,
-    FlagStorageByteVector, FlagStorageBitVectorRotate, FlagStorageBitVectorStriped, PrimeSieve,
+    FlagStorage, FlagStorageBitVector, FlagStorageByteVector, FlagStorageBitVectorRotate,
+    FlagStorageBitVectorStriped, PrimeSieve,
 };
 use std::{thread, time::{Duration, Instant}};
+use structopt::clap::{AppSettings, Error, ErrorKind};
 use structopt::StructOpt;
+use ui::Ui;
+
+mod ui;
 
 pub mod primes {
-    use std::{collections::HashMap, time::Duration, usize};
+    use std::{collections::HashMap, usize};
 
     /// Validator to compare against known primes.
     /// Pulled this out into a separate struct, as it's defined
@@ -280,6 +284,13 @@ pub mod primes {
                 .count()
         }
 
+        // list all primes found; 2 is implicit, as only odd numbers are stored
+        pub fn primes(&self) -> Vec<usize> {
+            std::iter::once(2)
+                .chain((3..self.sieve_size).filter(|n| self.is_num_flagged(*n)))
+                .collect()
+        }
+
         // calculate the primes up to the specified limit
         pub fn run_sieve(&mut self) {
             let mut factor = 3;
@@ -301,82 +312,30 @@ pub mod primes {
                 factor += 2;
             }
         }
-    }
+    }}
 
-    /// print results to console stderr for good feedback
-    pub fn print_results_stderr<T: FlagStorage>(
-        label: &str,
-        prime_sieve: &PrimeSieve<T>,
-        show_results: bool,
-        duration: Duration,
-        passes: usize,
-        threads: usize,
-        validator: &PrimeValidator,
-    ) {
-        if show_results {
-            eprint!("2,");
-            for num in (3..prime_sieve.sieve_size).filter(|n| prime_sieve.is_num_flagged(*n)) {
-                print!("{},", num);
-            }
-            eprint!("\n");
-        }
-
-        let count = prime_sieve.count_primes();
-
-        eprintln!(
-            "{:15} Passes: {}, Threads: {}, Time: {:.10}, Average: {:.10}, Limit: {}, Counts: {}, Valid: {}",
-            label,
-            passes,
-            threads,
-            duration.as_secs_f32(),
-            duration.as_secs_f32() / passes as f32,
-            prime_sieve.sieve_size,
-            count,
-            match validator.is_valid(prime_sieve.sieve_size, count) {
-                Some(true) => "Pass",
-                Some(false) => "Fail",
-                None => "Unknown"
-            }
-        );
-    }
-
-    /// print correctly-formatted results to `stderr` as per CONTRIBUTING.md
-    /// - format is <name>;<iterations>;<total_time>;<num_threads>
-    pub fn report_results_stdout(label: &str, bits_per_prime: usize, duration: Duration, passes: usize, threads: usize) {
-        println!(
-            "mike-barber_{};{};{:.10};{};algorithm=base,faithful=yes,bits={}",
-            label,
-            passes,
-            duration.as_secs_f32(),
-            threads,
-            bits_per_prime
-        );
-    }
-}
-
-/// Rust program to calculate number of primes under a given limit.
+/// Measure CPU speed by counting primes with a multi-threaded sieve.
 #[derive(StructOpt, Debug)]
-#[structopt(name = "abstracted")]
+#[structopt(setting = AppSettings::ColoredHelp)]
 struct CommandLineOptions {
-    /// Number of threads. If not specified, use all logical CPUs
-    /// (including hyper-threads / virtual cores).
+    /// Number of threads [default: all logical CPUs, including hyper-threads]
     #[structopt(short, long)]
     threads: Option<usize>,
 
-    /// Run duration
+    /// Run duration in seconds
     #[structopt(short, long, default_value = "5")]
     seconds: u64,
 
-    /// Prime sieve limit -- count primes that occur under or equal to this number.
-    /// If you want this compared with known results, pick an order of 10: 10,100,...100000000
+    /// Count primes up to this number. Counts are checked against known results
+    /// when it's a power of 10, up to 100000000
     #[structopt(short, long, default_value = "1000000")]
     limit: usize,
 
-    /// Number of times to run the experiment
+    /// Number of runs of each variant
     #[structopt(short, long, default_value = "1")]
     repetitions: usize,
 
-    /// Print out all primes found
+    /// Print all primes found
     #[structopt(short, long)]
     print: bool,
 
@@ -410,96 +369,100 @@ fn main() {
     // all logical CPUs (including hyper-threads / vCPUs), unless --threads is given
     let threads = opt.threads.unwrap_or_else(num_cpus::get);
 
+    // reject settings that would leave nothing to measure
+    for (flag, value) in [
+        ("--threads", threads as u64),
+        ("--seconds", opt.seconds),
+        ("--repetitions", repetitions as u64),
+    ] {
+        if value == 0 {
+            Error::with_description(&format!("{} must be at least 1", flag), ErrorKind::InvalidValue)
+                .exit();
+        }
+    }
+
+    let ui = Ui::detect();
+    ui.header(threads, opt.threads.is_none(), limit, run_duration, repetitions);
+    ui.table_header();
+
+    let mut results = Vec::new();
+    let mut run_variant = |label: &'static str, run: Runner| {
+        // let the system settle before each variant, showing it as up next
+        ui.progress(label, Duration::ZERO, run_duration);
+        thread::sleep(Duration::from_secs(1));
+        for _ in 0..repetitions {
+            // every variant finds the same primes, so only the first run keeps them for --print
+            let keep_primes = opt.print && results.is_empty();
+            let result = run(label, run_duration, threads, limit, keep_primes, ui);
+            ui.row(&result);
+            results.push(result);
+        }
+    };
+
     // run only the striped implementation if no variant is specified (default)
     let run_default = [opt.bits, opt.bits_rotate, opt.bits_striped, opt.bytes].iter().all(|b| !b);
 
     if opt.bytes {
-        thread::sleep(Duration::from_secs(1));
-        print_header(threads, limit, run_duration);
-        for _ in 0..repetitions {
-            run_implementation::<FlagStorageByteVector>(
-                "byte-storage",
-                8,
-                run_duration,
-                threads,
-                limit,
-                opt.print,
-            );
-        }
+        run_variant("byte-storage", run_implementation::<FlagStorageByteVector>);
     }
 
     if opt.bits {
-        thread::sleep(Duration::from_secs(1));
-        print_header(threads, limit, run_duration);
-        for _ in 0..repetitions {
-            run_implementation::<FlagStorageBitVector>(
-                "bit-storage",
-                1,
-                run_duration,
-                threads,
-                limit,
-                opt.print,
-            );
-        }
+        run_variant("bit-storage", run_implementation::<FlagStorageBitVector>);
     }
 
     if opt.bits_rotate {
-        thread::sleep(Duration::from_secs(1));
-        print_header(threads, limit, run_duration);
-        for _ in 0..repetitions {
-            run_implementation::<FlagStorageBitVectorRotate>(
-                "bit-storage-rotate",
-                1,
-                run_duration,
-                threads,
-                limit,
-                opt.print,
-            );
-        }
+        run_variant("bit-storage-rotate", run_implementation::<FlagStorageBitVectorRotate>);
     }
 
     if opt.bits_striped || run_default {
-        thread::sleep(Duration::from_secs(1));
-        print_header(threads, limit, run_duration);
-        for _ in 0..repetitions {
-            run_implementation::<FlagStorageBitVectorStriped>(
-                "bit-storage-striped",
-                1,
-                run_duration,
-                threads,
-                limit,
-                opt.print,
-            );
-        }
+        run_variant("bit-storage-striped", run_implementation::<FlagStorageBitVectorStriped>);
+    }
+
+    ui.summary(&results);
+    if opt.print {
+        ui.primes(limit, &results[0].primes);
     }
 }
 
-fn print_header(threads: usize, limit: usize, run_duration: Duration) {
-    eprintln!();
-    eprintln!(
-        "Computing primes to {} on {} thread{} for {} second{}.",
-        limit,
-        threads,
-        match threads {
-            1 => "",
-            _ => "s",
-        },
-        run_duration.as_secs(),
-        match run_duration.as_secs() {
-            1 => "",
-            _ => "s",
-        }
-    );
+/// The outcome of timing one variant.
+struct RunResult {
+    label: &'static str,
+    threads: usize,
+    /// sieve passes completed across all threads
+    passes: usize,
+    duration: Duration,
+    /// primes counted by one of the sieves
+    count: usize,
+    /// whether `count` matches the known result, if there is one for this limit
+    valid: Option<bool>,
+    /// every prime found, only collected when they're going to be printed
+    primes: Vec<usize>,
 }
 
+impl RunResult {
+    /// Sieve passes per second, across all threads.
+    fn rate(&self) -> f64 {
+        self.passes as f64 / self.duration.as_secs_f64()
+    }
+
+    /// Average time for one thread to complete a single pass, in seconds.
+    fn pass_time(&self) -> f64 {
+        self.duration.as_secs_f64() * self.threads as f64 / self.passes as f64
+    }
+}
+
+/// `run_implementation` for one storage type.
+type Runner = fn(&'static str, Duration, usize, usize, bool, Ui) -> RunResult;
+
+/// Time one variant on `num_threads` threads for `run_duration`, showing a progress bar meanwhile.
 fn run_implementation<T: 'static + FlagStorage + Send>(
-    label: &str,
-    bits_per_prime: usize,
+    label: &'static str,
     run_duration: Duration,
     num_threads: usize,
     limit: usize,
-    print_primes: bool,
-) {
+    keep_primes: bool,
+    ui: Ui,
+) -> RunResult {
     // spin up N threads; each will terminate itself after `run_duration`, returning
     // the last sieve as well as the total number of counts.
     let start_time = Instant::now();
@@ -520,27 +483,36 @@ fn run_implementation<T: 'static + FlagStorage + Send>(
         })
         .collect();
 
+    // animate the progress bar until the threads are due to stop, waking up
+    // on time so that the end time recorded below stays accurate
+    if ui.is_live() {
+        while let Some(remaining) = run_duration.checked_sub(start_time.elapsed()) {
+            ui.progress(label, start_time.elapsed(), run_duration);
+            thread::sleep(remaining.min(Duration::from_millis(100)));
+        }
+        ui.progress(label, run_duration, run_duration);
+    }
+
     // wait for threads to finish, and record end time
     let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
     let end_time = Instant::now();
+    ui.clear_progress();
 
-    // get totals and print results based on one of the sieves
-    let total_passes = results.iter().map(|r| r.0).sum();
-    let check_sieve = &results.first().unwrap().1;
-    if let Some(sieve) = check_sieve {
-        let duration = end_time - start_time;
-        // print results to stderr for convenience
-        print_results_stderr(
-            label,
-            &sieve,
-            print_primes,
-            duration,
-            total_passes,
-            num_threads,
-            &primes::PrimeValidator::default(),
-        );
-        // and report results to stdout for reporting
-        report_results_stdout(label, bits_per_prime, duration, total_passes, num_threads);
+    // get totals, and check the primes counted by one of the sieves
+    let passes = results.iter().map(|r| r.0).sum();
+    let sieve = results.into_iter().next().and_then(|r| r.1);
+    let count = sieve.as_ref().map_or(0, |sieve| sieve.count_primes());
+    RunResult {
+        label,
+        threads: num_threads,
+        passes,
+        duration: end_time - start_time,
+        count,
+        valid: primes::PrimeValidator::default().is_valid(limit, count),
+        primes: match sieve {
+            Some(sieve) if keep_primes => sieve.primes(),
+            _ => Vec::new(),
+        },
     }
 }
 
