@@ -5,9 +5,6 @@ use primes::{
 use std::{thread, time::{Duration, Instant}};
 use structopt::StructOpt;
 
-// Specify the number of the CPU virtual cores
-const V_CPU: usize = 4;
-
 pub mod primes {
     use std::{collections::HashMap, time::Duration, usize};
 
@@ -361,8 +358,8 @@ pub mod primes {
 #[derive(StructOpt, Debug)]
 #[structopt(name = "abstracted")]
 struct CommandLineOptions {
-    /// Number of threads. If not specified, do two runs for both
-    /// single threaded case and maximum concurrency.
+    /// Number of threads. If not specified, use all logical CPUs
+    /// (including hyper-threads / virtual cores).
     #[structopt(short, long)]
     threads: Option<usize>,
 
@@ -392,6 +389,7 @@ struct CommandLineOptions {
     bits_rotate: bool,
 
     /// Run variant that uses bit-level storage, using striped storage
+    /// (runs by default if no variant is selected)
     #[structopt(long)]
     bits_striped: bool,
 
@@ -409,77 +407,71 @@ fn main() {
     let repetitions = opt.repetitions;
     let run_duration = Duration::from_secs(opt.seconds);
 
-    let _thread_options = match opt.threads {
-        Some(t) => vec![t],
-        None => vec![1, num_cpus::get()],
-    };
+    // all logical CPUs (including hyper-threads / vCPUs), unless --threads is given
+    let threads = opt.threads.unwrap_or_else(num_cpus::get);
 
-    // run all implementations if no options are specified (default)
-    //let run_all = [opt.bits, opt.bits_rotate, opt.bits_striped, opt.bytes].iter().all(|b| !b);
-   // let run_all = [opt.bits, opt.bits_rotate, opt.bits_striped, opt.bytes].iter().all(|b| !b);
+    // run only the striped implementation if no variant is specified (default)
+    let run_default = [opt.bits, opt.bits_rotate, opt.bits_striped, opt.bytes].iter().all(|b| !b);
 
-    //for threads in thread_options {
-       /* if opt.bytes || run_all {
-            thread::sleep(Duration::from_secs(1));
-            print_header(threads, limit, run_duration);
-            for _ in 0..repetitions {
-                run_implementation::<FlagStorageByteVector>(
-                    "byte-storage",
-                    8,
-                    run_duration,
-                    threads,
-                    limit,
-                    opt.print,
-                );
-            }
+    if opt.bytes {
+        thread::sleep(Duration::from_secs(1));
+        print_header(threads, limit, run_duration);
+        for _ in 0..repetitions {
+            run_implementation::<FlagStorageByteVector>(
+                "byte-storage",
+                8,
+                run_duration,
+                threads,
+                limit,
+                opt.print,
+            );
         }
+    }
 
-        if opt.bits || run_all {
-            thread::sleep(Duration::from_secs(1));
-            print_header(threads, limit, run_duration);
-            for _ in 0..repetitions {
-                run_implementation::<FlagStorageBitVector>(
-                    "bit-storage",
-                    1,
-                    run_duration,
-                    threads,
-                    limit,
-                    opt.print,
-                );
-            }
+    if opt.bits {
+        thread::sleep(Duration::from_secs(1));
+        print_header(threads, limit, run_duration);
+        for _ in 0..repetitions {
+            run_implementation::<FlagStorageBitVector>(
+                "bit-storage",
+                1,
+                run_duration,
+                threads,
+                limit,
+                opt.print,
+            );
         }
+    }
 
-        if opt.bits_rotate || run_all {
-            thread::sleep(Duration::from_secs(1));
-            print_header(threads, limit, run_duration);
-            for _ in 0..repetitions {
-                run_implementation::<FlagStorageBitVectorRotate>(
-                    "bit-storage-rotate",
-                    1,
-                    run_duration,
-                    threads,
-                    limit,
-                    opt.print,
-                );
-            }
-        }*/
+    if opt.bits_rotate {
+        thread::sleep(Duration::from_secs(1));
+        print_header(threads, limit, run_duration);
+        for _ in 0..repetitions {
+            run_implementation::<FlagStorageBitVectorRotate>(
+                "bit-storage-rotate",
+                1,
+                run_duration,
+                threads,
+                limit,
+                opt.print,
+            );
+        }
+    }
 
-        //if opt.bits_striped || run_all {
-            let threads = V_CPU;
-            thread::sleep(Duration::from_secs(1));
-            print_header(threads, limit, run_duration);
-            for _ in 0..repetitions {
-                run_implementation::<FlagStorageBitVectorStriped>(
-                    "bit-storage-striped",
-                    1,
-                    run_duration,
-                    threads,
-                    limit,
-                    opt.print,
-                );
-            }
-        //}
-   // }
+    if opt.bits_striped || run_default {
+        thread::sleep(Duration::from_secs(1));
+        print_header(threads, limit, run_duration);
+        for _ in 0..repetitions {
+            run_implementation::<FlagStorageBitVectorStriped>(
+                "bit-storage-striped",
+                1,
+                run_duration,
+                threads,
+                limit,
+                opt.print,
+            );
+        }
+    }
 }
 
 fn print_header(threads: usize, limit: usize, run_duration: Duration) {
