@@ -6,7 +6,7 @@ use std::{thread, time::{Duration, Instant}};
 use structopt::StructOpt;
 
 // Specify the number of the CPU virtual cores
-const V_CPU: usize = 16;
+const V_CPU: usize = 4;
 
 pub mod primes {
     use std::{collections::HashMap, time::Duration, usize};
