@@ -1,13 +1,14 @@
+use clap::builder::styling::{AnsiColor, Styles};
+use clap::Parser;
 use primes::{
     FlagStorage, FlagStorageBitVector, FlagStorageBitVectorRotate, FlagStorageBitVectorStriped,
     FlagStorageByteVector, PrimeSieve,
 };
 use std::{
+    str::FromStr,
     thread,
     time::{Duration, Instant},
 };
-use structopt::clap::{AppSettings, Error, ErrorKind};
-use structopt::StructOpt;
 use ui::Ui;
 
 mod ui;
@@ -294,70 +295,74 @@ pub mod primes {
 }
 
 /// Measure CPU speed by counting primes with a multi-threaded sieve.
-#[derive(StructOpt, Debug)]
-#[structopt(setting = AppSettings::ColoredHelp)]
+#[derive(Parser, Debug)]
+#[command(version, styles = HELP_STYLES)]
 struct CommandLineOptions {
     /// Number of threads [default: all logical CPUs, including hyper-threads]
-    #[structopt(short, long)]
+    #[arg(short, long, value_parser = at_least_one::<usize>)]
     threads: Option<usize>,
 
     /// Run duration in seconds
-    #[structopt(short, long, default_value = "5")]
+    #[arg(short, long, default_value_t = 5, value_parser = at_least_one::<u64>)]
     seconds: u64,
 
     /// Count primes up to this number. Counts are checked against known results
     /// when it's a power of 10, up to 100000000
-    #[structopt(short, long, default_value = "1000000")]
+    #[arg(short, long, default_value_t = 1_000_000)]
     limit: usize,
 
     /// Number of runs of each variant
-    #[structopt(short, long, default_value = "1")]
+    #[arg(short, long, default_value_t = 1, value_parser = at_least_one::<usize>)]
     repetitions: usize,
 
     /// Print all primes found
-    #[structopt(short, long)]
+    #[arg(short, long)]
     print: bool,
 
     /// Run variant that uses bit-level storage
-    #[structopt(long)]
+    #[arg(long)]
     bits: bool,
 
-    /// Run variant that uses bit-level storage, applied using rotate
-    #[structopt(long)]
+    /// Run variant that uses bit-level storage with a rotating mask
+    #[arg(long)]
     bits_rotate: bool,
 
-    /// Run variant that uses bit-level storage, using striped storage
-    /// (runs by default if no variant is selected)
-    #[structopt(long)]
+    /// Run variant that uses striped bit-level storage (the default if no variant is selected)
+    #[arg(long)]
     bits_striped: bool,
 
     /// Run variant that uses byte-level storage
-    #[structopt(long)]
+    #[arg(long)]
     bytes: bool,
 }
 
+/// --help colours, like cargo's.
+const HELP_STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Green.on_default().bold())
+    .usage(AnsiColor::Green.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
+    .placeholder(AnsiColor::Cyan.on_default());
+
+/// Parses a whole number that is at least 1.
+fn at_least_one<T>(arg: &str) -> Result<T, String>
+where
+    T: FromStr + PartialOrd + From<u8>,
+    T::Err: std::fmt::Display,
+{
+    match arg.parse::<T>() {
+        Ok(n) if n >= T::from(1) => Ok(n),
+        Ok(_) => Err("must be at least 1".to_string()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
 fn main() {
-    let opt = CommandLineOptions::from_args();
+    let opt = CommandLineOptions::parse();
 
     let limit = opt.limit;
     let repetitions = opt.repetitions;
     let run_duration = Duration::from_secs(opt.seconds);
     let threads = opt.threads.unwrap_or_else(num_cpus::get);
-
-    // reject settings that would leave nothing to measure
-    for (flag, value) in [
-        ("--threads", threads as u64),
-        ("--seconds", opt.seconds),
-        ("--repetitions", repetitions as u64),
-    ] {
-        if value == 0 {
-            Error::with_description(
-                &format!("{} must be at least 1", flag),
-                ErrorKind::InvalidValue,
-            )
-            .exit();
-        }
-    }
 
     let ui = Ui::detect();
     ui.header(
