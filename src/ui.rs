@@ -85,18 +85,18 @@ impl Ui {
             "CPU",
             cpu_model().unwrap_or_else(|| env::consts::ARCH.to_string()),
         );
-        field(
-            "Cores",
-            format!(
-                "{} logical · {} physical",
-                num_cpus::get(),
-                num_cpus::get_physical()
-            ),
-        );
+        let logical = num_cpus::get();
+        let physical = num_cpus::get_physical();
+        field("Cores", describe_cores(logical, physical, core_types()));
         field(
             "Threads",
             if auto_threads {
-                format!("{} {}", threads, p.dim("(all logical cores)"))
+                let per = if logical > physical {
+                    "CPU thread"
+                } else {
+                    "core"
+                };
+                format!("{}{}", threads, p.dim(&format!(", one per {}", per)))
             } else {
                 threads.to_string()
             },
@@ -341,9 +341,69 @@ fn cpu_model() -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// The core count in plain words, e.g. "8 (16 threads)" or "11 (5 performance, 6 efficiency)".
+fn describe_cores(logical: usize, physical: usize, types: Option<(usize, usize)>) -> String {
+    // fewer CPUs than cores means the OS or a container limits what this program can use
+    let mut text = if logical < physical {
+        format!("{} available, of {}", logical, physical)
+    } else {
+        physical.to_string()
+    };
+    let mut details = Vec::new();
+    if logical > physical {
+        details.push(format!("{} threads", logical));
+    }
+    if let Some((performance, efficiency)) = types {
+        details.push(format!(
+            "{} performance, {} efficiency",
+            performance, efficiency
+        ));
+    }
+    if !details.is_empty() {
+        text = format!("{} ({})", text, details.join(", "));
+    }
+    text
+}
+
+/// How many performance and efficiency cores a Mac has, if its chip has both kinds.
+fn core_types() -> Option<(usize, usize)> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = std::process::Command::new("sysctl")
+        .args([
+            "-n",
+            "hw.nperflevels",
+            "hw.perflevel0.physicalcpu",
+            "hw.perflevel1.physicalcpu",
+        ])
+        .output()
+        .ok()?;
+    let counts: Vec<usize> = String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .map(|line| line.trim().parse().ok())
+        .collect::<Option<_>>()?;
+    match counts[..] {
+        [2, performance, efficiency] => Some((performance, efficiency)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describe_cores_reads_plainly() {
+        assert_eq!(describe_cores(4, 4, None), "4");
+        assert_eq!(describe_cores(16, 8, None), "8 (16 threads)");
+        assert_eq!(
+            describe_cores(11, 11, Some((5, 6))),
+            "11 (5 performance, 6 efficiency)"
+        );
+        assert_eq!(describe_cores(2, 8, None), "2 available, of 8");
+    }
 
     #[test]
     fn group_adds_thousands_separators() {

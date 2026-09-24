@@ -298,7 +298,7 @@ pub mod primes {
 #[derive(Parser, Debug)]
 #[command(version, styles = HELP_STYLES)]
 struct CommandLineOptions {
-    /// Number of threads [default: all logical CPUs, including hyper-threads]
+    /// Number of threads [default: as many as the CPU can run at once]
     #[arg(short, long, value_parser = at_least_one::<usize>)]
     threads: Option<usize>,
 

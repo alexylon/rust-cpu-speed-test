@@ -1,6 +1,6 @@
 # rust-cpu-speed-test
 
-Test CPU speed by calculating prime numbers. Uses all vCPUs (logical CPU cores, including hyper-threads) automatically; pass `--threads N` to override.
+Test CPU speed by calculating prime numbers. By default it runs as many threads as the CPU can run at once (one per core on Apple Silicon, one per vCPU on a cloud VM); pass `--threads N` to override.
 
 `cargo build --release`
 
