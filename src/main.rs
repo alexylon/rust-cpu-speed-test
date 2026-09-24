@@ -1,8 +1,11 @@
 use primes::{
-    FlagStorage, FlagStorageBitVector, FlagStorageByteVector, FlagStorageBitVectorRotate,
-    FlagStorageBitVectorStriped, PrimeSieve,
+    FlagStorage, FlagStorageBitVector, FlagStorageBitVectorRotate, FlagStorageBitVectorStriped,
+    FlagStorageByteVector, PrimeSieve,
 };
-use std::{thread, time::{Duration, Instant}};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 use structopt::clap::{AppSettings, Error, ErrorKind};
 use structopt::StructOpt;
 use ui::Ui;
@@ -12,16 +15,14 @@ mod ui;
 pub mod primes {
     use std::{collections::HashMap, usize};
 
-    /// Validator to compare against known primes.
-    /// Pulled this out into a separate struct, as it's defined
-    /// `const` in C++. There are various ways to do this in Rust, including
-    /// lazy_static, etc. Should be able to do the const initialisation in the future.
+    /// Known prime counts, used to check results.
     pub struct PrimeValidator(HashMap<usize, usize>);
     impl Default for PrimeValidator {
         fn default() -> Self {
+            // (limit, number of primes below it)
             let map = [
-                (10, 4),   // Historical data for validating our results - the number of primes
-                (100, 25), // to be found under some limit, such as 168 primes under 1000
+                (10, 4),
+                (100, 25),
                 (1000, 168),
                 (10000, 1229),
                 (100000, 9592),
@@ -29,15 +30,14 @@ pub mod primes {
                 (10000000, 664579),
                 (100000000, 5761455),
             ]
-                .iter()
-                .copied()
-                .collect();
+            .iter()
+            .copied()
+            .collect();
             PrimeValidator(map)
         }
     }
     impl PrimeValidator {
-        // Return Some(true) or Some(false) if we know the answer, or None if we don't have
-        // an entry for the given sieve_size.
+        /// Whether `result` is the right count for `sieve_size`, or `None` if it isn't known.
         pub fn is_valid(&self, sieve_size: usize, result: usize) -> Option<bool> {
             if let Some(&expected) = self.0.get(&sieve_size) {
                 Some(result == expected)
@@ -52,32 +52,25 @@ pub mod primes {
         }
     }
 
-    /// Trait defining the interface to different kinds of storage, e.g.
-    /// bits within bytes, a vector of bytes, etc.
+    /// The sieve's true/false flags. Each variant stores them in a different way.
     pub trait FlagStorage {
-        /// create new storage for given number of flags pre-initialised to all true
+        /// Creates `size` flags, all set to true.
         fn create_true(size: usize) -> Self;
 
-        /// reset all flags at indices starting at `start` with a stride of `stride`
+        /// Clears every `skip`th flag, starting at `start`.
         fn reset_flags(&mut self, start: usize, skip: usize);
 
-        /// get a specific flag
         fn get(&self, index: usize) -> bool;
     }
 
-    /// Storage using a simple vector of bytes.
-    /// Doing the same with bools is equivalent, as bools are currently
-    /// represented as bytes in Rust. However, this is not guaranteed to
-    /// remain so for all time. To ensure consistent memory use in the future,
-    /// we're explicitly using bytes (u8) here.
+    /// One byte per flag.
     pub struct FlagStorageByteVector(Vec<u8>);
     impl FlagStorage for FlagStorageByteVector {
         fn create_true(size: usize) -> Self {
             FlagStorageByteVector(vec![1; size])
         }
 
-
-        // bounds checks are elided since we're runing up to .len()
+        // the loop condition lets the compiler skip the bounds check on self.0[i]
         #[inline(always)]
         fn reset_flags(&mut self, start: usize, skip: usize) {
             let mut i = start;
@@ -96,8 +89,7 @@ pub mod primes {
         }
     }
 
-    /// Storage using a vector of 32-bit words, but addressing individual bits within each. Bits are
-    /// reset by applying a mask created by a shift on every iteration, similar to the C++ implementation.
+    /// One bit per flag, packed into 32-bit words. Builds a new bit mask for every flag it clears.
     pub struct FlagStorageBitVector {
         words: Vec<u32>,
         length_bits: usize,
@@ -119,8 +111,8 @@ pub mod primes {
             while i < self.words.len() * U32_BITS {
                 let word_idx = i / U32_BITS;
                 let bit_idx = i % U32_BITS;
-                // Note: Unsafe usage to ensure that we elide the bounds check reliably.
-                //       We have ensured that word_index < self.words.len().
+                // skips the bounds check, which the compiler doesn't reliably remove;
+                // the loop condition keeps word_idx in range
                 unsafe {
                     *self.words.get_unchecked_mut(word_idx) &= !(1 << bit_idx);
                 }
@@ -137,8 +129,7 @@ pub mod primes {
         }
     }
 
-    /// Storage using a vector of 32-bit words, but addressing individual bits within each. Bits are
-    /// reset by rotating the mask left instead of modulo+shift.
+    /// Like `FlagStorageBitVector`, but rotates a single mask instead of building one per flag.
     pub struct FlagStorageBitVectorRotate {
         words: Vec<u32>,
         length_bits: usize,
@@ -161,8 +152,8 @@ pub mod primes {
             let roll_bits = skip as u32;
             while i < self.words.len() * U32_BITS {
                 let word_idx = i / U32_BITS;
-                // Note: Unsafe usage to ensure that we elide the bounds check reliably.
-                //       We have ensured that word_index < self.words.len().
+                // skips the bounds check, which the compiler doesn't reliably remove;
+                // the loop condition keeps word_idx in range
                 unsafe {
                     *self.words.get_unchecked_mut(word_idx) &= rolling_mask;
                 }
@@ -180,20 +171,11 @@ pub mod primes {
         }
     }
 
-    /// Storage using a vector of (8-bit) bytes, but individually addressing bits within
-    /// each byte for bit-level storage. This is a fun variation I made up myself, but
-    /// I'm pretty sure it's not original: someone must have done this before, and it
-    /// probably has a name. If you happen to know, let me know :)
-    ///
-    /// The idea here is to store bits in a different order. First we make use of all the
-    /// _first_ bits in each word. Then we come back to the start of the array and
-    /// proceed to use the _second_ bit in each word, and so on.
-    ///
-    /// There is a computation / memory bandwidth tradeoff here. This works well
-    /// only for sieves that fit inside the processor cache. For processors with
-    /// smaller caches or larger sieves, this algorithm will result in a lot of
-    /// cache thrashing.
     const U8_BITS: usize = 8;
+
+    /// One bit per flag, in bytes, filled in stripes: first bit 0 of every byte, then bit 1 of
+    /// every byte, and so on. Clearing is fast while the sieve fits in the CPU cache, but slow
+    /// once it doesn't.
     pub struct FlagStorageBitVectorStriped {
         words: Vec<u8>,
         length_bits: usize,
@@ -215,18 +197,16 @@ pub mod primes {
         fn reset_flags(&mut self, start: usize, skip: usize) {
             let chunk = self.words.len();
             for bit in 0..8 {
-                // get mask for this bit position
                 let mask = !(1_u8 << bit);
 
-                // calculate start word for this stripe
+                // first word in this stripe that holds a flag to clear
                 let chunk_start = bit * chunk;
                 let earliest = start.max(chunk_start);
                 let diff = earliest as isize - start as isize;
                 let relative = Self::ceiling(diff, skip as isize) * skip as isize;
                 let chunk_start = relative as usize + start - chunk_start;
 
-                // for larger `skips`, not every bit will have any corresponding words
-                // take slice starting here, and reset the bit in every `skip`th word
+                // a large skip can jump past a whole stripe
                 if chunk_start < chunk {
                     let slice = &mut self.words[chunk_start..];
                     let mut i = 0;
@@ -249,17 +229,15 @@ pub mod primes {
         }
     }
 
-
-    /// The actual sieve implementation, generic over the storage. This allows us to
-    /// include the storage type we want without re-writing the algorithm each time.
+    /// The sieve itself, which works with any flag storage. It only stores odd numbers.
     pub struct PrimeSieve<T: FlagStorage> {
         sieve_size: usize,
         flags: T,
     }
 
     impl<T> PrimeSieve<T>
-        where
-            T: FlagStorage,
+    where
+        T: FlagStorage,
     {
         pub fn new(sieve_size: usize) -> Self {
             let num_flags = sieve_size / 2 + 1;
@@ -277,34 +255,34 @@ pub mod primes {
             self.flags.get(index)
         }
 
-        // count number of primes (not optimal, but doesn't need to be)
+        /// Counts the primes found. 1 is never cleared, so it is counted in place of 2,
+        /// which isn't stored.
         pub fn count_primes(&self) -> usize {
             (1..self.sieve_size)
                 .filter(|v| self.is_num_flagged(*v))
                 .count()
         }
 
-        // list all primes found; 2 is implicit, as only odd numbers are stored
+        /// Lists the primes found, adding 2 by hand, as only odd numbers are stored.
         pub fn primes(&self) -> Vec<usize> {
             std::iter::once(2)
                 .chain((3..self.sieve_size).filter(|n| self.is_num_flagged(*n)))
                 .collect()
         }
 
-        // calculate the primes up to the specified limit
+        /// Clears the flags of the odd numbers that aren't prime.
         pub fn run_sieve(&mut self) {
             let mut factor = 3;
             let q = (self.sieve_size as f32).sqrt() as usize;
 
-            // note: need to check up to and including q, otherwise we
-            // fail to catch cases like sieve_size = 1000
+            // include q itself, or limits like 1000 give the wrong count
             while factor <= q {
-                // find next factor - next still-flagged number
                 factor = (factor..self.sieve_size)
                     .find(|n| self.is_num_flagged(*n))
                     .unwrap();
 
-                // reset flags starting at `start`, every `factor`'th flag
+                // Clear the odd multiples of factor, starting at its square. Only odd numbers
+                // are stored, so a step of `factor` flags is a step of 2 * factor in numbers.
                 let start = factor * factor / 2;
                 let skip = factor;
                 self.flags.reset_flags(start, skip);
@@ -312,7 +290,8 @@ pub mod primes {
                 factor += 2;
             }
         }
-    }}
+    }
+}
 
 /// Measure CPU speed by counting primes with a multi-threaded sieve.
 #[derive(StructOpt, Debug)]
@@ -358,15 +337,11 @@ struct CommandLineOptions {
 }
 
 fn main() {
-    // command line options are handled by the `structopt` and `clap` crates, which
-    // makes life very pleasant indeed. At the cost of a bit of compile time :)
     let opt = CommandLineOptions::from_args();
 
     let limit = opt.limit;
     let repetitions = opt.repetitions;
     let run_duration = Duration::from_secs(opt.seconds);
-
-    // all logical CPUs (including hyper-threads / vCPUs), unless --threads is given
     let threads = opt.threads.unwrap_or_else(num_cpus::get);
 
     // reject settings that would leave nothing to measure
@@ -376,13 +351,22 @@ fn main() {
         ("--repetitions", repetitions as u64),
     ] {
         if value == 0 {
-            Error::with_description(&format!("{} must be at least 1", flag), ErrorKind::InvalidValue)
-                .exit();
+            Error::with_description(
+                &format!("{} must be at least 1", flag),
+                ErrorKind::InvalidValue,
+            )
+            .exit();
         }
     }
 
     let ui = Ui::detect();
-    ui.header(threads, opt.threads.is_none(), limit, run_duration, repetitions);
+    ui.header(
+        threads,
+        opt.threads.is_none(),
+        limit,
+        run_duration,
+        repetitions,
+    );
     ui.table_header();
 
     let mut results = Vec::new();
@@ -399,8 +383,10 @@ fn main() {
         }
     };
 
-    // run only the striped implementation if no variant is specified (default)
-    let run_default = [opt.bits, opt.bits_rotate, opt.bits_striped, opt.bytes].iter().all(|b| !b);
+    // striped is the default when no variant is chosen
+    let run_default = [opt.bits, opt.bits_rotate, opt.bits_striped, opt.bytes]
+        .iter()
+        .all(|b| !b);
 
     if opt.bytes {
         run_variant("byte-storage", run_implementation::<FlagStorageByteVector>);
@@ -411,11 +397,17 @@ fn main() {
     }
 
     if opt.bits_rotate {
-        run_variant("bit-storage-rotate", run_implementation::<FlagStorageBitVectorRotate>);
+        run_variant(
+            "bit-storage-rotate",
+            run_implementation::<FlagStorageBitVectorRotate>,
+        );
     }
 
     if opt.bits_striped || run_default {
-        run_variant("bit-storage-striped", run_implementation::<FlagStorageBitVectorStriped>);
+        run_variant(
+            "bit-storage-striped",
+            run_implementation::<FlagStorageBitVectorStriped>,
+        );
     }
 
     ui.summary(&results);
@@ -435,7 +427,7 @@ struct RunResult {
     count: usize,
     /// whether `count` matches the known result, if there is one for this limit
     valid: Option<bool>,
-    /// every prime found, only collected when they're going to be printed
+    /// every prime found, only collected for --print
     primes: Vec<usize>,
 }
 
@@ -463,8 +455,8 @@ fn run_implementation<T: 'static + FlagStorage + Send>(
     keep_primes: bool,
     ui: Ui,
 ) -> RunResult {
-    // spin up N threads; each will terminate itself after `run_duration`, returning
-    // the last sieve as well as the total number of counts.
+    // Each thread runs sieves until time is up, then returns its pass count and last sieve.
+    // Returning the sieve stops the compiler from optimising the work away.
     let start_time = Instant::now();
     let threads: Vec<_> = (0..num_threads)
         .map(|_| {
@@ -477,14 +469,12 @@ fn run_implementation<T: 'static + FlagStorage + Send>(
                     last_sieve.replace(sieve);
                     local_passes += 1;
                 }
-                // return local pass count and last sieve
                 (local_passes, last_sieve)
             })
         })
         .collect();
 
-    // animate the progress bar until the threads are due to stop, waking up
-    // on time so that the end time recorded below stays accurate
+    // redraw the progress bar until time is up, waking on time so the end time stays accurate
     if ui.is_live() {
         while let Some(remaining) = run_duration.checked_sub(start_time.elapsed()) {
             ui.progress(label, start_time.elapsed(), run_duration);
@@ -493,12 +483,11 @@ fn run_implementation<T: 'static + FlagStorage + Send>(
         ui.progress(label, run_duration, run_duration);
     }
 
-    // wait for threads to finish, and record end time
     let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
     let end_time = Instant::now();
     ui.clear_progress();
 
-    // get totals, and check the primes counted by one of the sieves
+    // all sieves are the same, so checking one is enough
     let passes = results.iter().map(|r| r.0).sum();
     let sieve = results.into_iter().next().and_then(|r| r.1);
     let count = sieve.as_ref().map_or(0, |sieve| sieve.count_primes());

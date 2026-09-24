@@ -12,7 +12,6 @@ use crate::RunResult;
 
 /// Width of the first column, holding variant names in the table and progress bar.
 const LABEL_WIDTH: usize = 21;
-/// Width of the progress bar itself.
 const BAR_WIDTH: usize = 30;
 /// Covers the longest progress line, so that it can be erased.
 const PROGRESS_WIDTH: usize = 2 + LABEL_WIDTH + BAR_WIDTH + 18;
@@ -217,15 +216,14 @@ impl Ui {
     }
 }
 
-/// ANSI styling for one output stream; text passes through unchanged when
-/// colours are off.
+/// Colours and bold text for one output stream. Text is left as is when colours are off.
 #[derive(Clone, Copy)]
 struct Paint(bool);
 
 impl Paint {
     fn for_stream(is_terminal: bool) -> Self {
         let no_color = env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
-        // the classic Windows console prints escape codes as-is
+        // the old Windows console can't show colours and prints the codes as text
         let legacy_console =
             cfg!(windows) && env::var_os("WT_SESSION").is_none() && env::var_os("TERM").is_none();
         Paint(is_terminal && !no_color && !legacy_console && !is_dumb_terminal())
