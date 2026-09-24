@@ -6,6 +6,7 @@
 
 use std::env;
 use std::io::{self, IsTerminal, Write};
+use std::process;
 use std::time::Duration;
 
 use crate::RunResult;
@@ -15,6 +16,25 @@ const LABEL_WIDTH: usize = 21;
 const BAR_WIDTH: usize = 30;
 /// Covers the longest progress line, so that it can be erased.
 const PROGRESS_WIDTH: usize = 2 + LABEL_WIDTH + BAR_WIDTH + 18;
+
+/// Like `println!`, but ends the program instead of panicking when stdout is closed.
+macro_rules! out {
+    ($($arg:tt)*) => {
+        if let Err(err) = writeln!(io::stdout(), $($arg)*) {
+            stdout_failed(err)
+        }
+    };
+}
+
+/// Ends the program when results can't be written. A closed pipe, as with `| head`,
+/// just means nobody is reading any more, so that isn't an error.
+fn stdout_failed(err: io::Error) -> ! {
+    if err.kind() == io::ErrorKind::BrokenPipe {
+        process::exit(0);
+    }
+    eprintln!("error: can't write results: {}", err);
+    process::exit(1);
+}
 
 /// Where output goes and how it's styled, detected once at startup.
 #[derive(Clone, Copy)]
@@ -52,15 +72,15 @@ impl Ui {
     ) {
         let p = self.out;
         let field =
-            |name: &str, value: String| println!("  {}  {}", p.dim(&format!("{:<8}", name)), value);
+            |name: &str, value: String| out!("  {}  {}", p.dim(&format!("{:<8}", name)), value);
 
-        println!();
-        println!(
+        out!();
+        out!(
             "  {}  {}",
             p.bold("CPU Speed Test"),
             p.dim("prime sieve benchmark")
         );
-        println!();
+        out!();
         field(
             "CPU",
             cpu_model().unwrap_or_else(|| env::consts::ARCH.to_string()),
@@ -92,7 +112,7 @@ impl Ui {
                 p.yellow("debug, so expect far lower numbers than with --release"),
             );
         }
-        println!();
+        out!();
     }
 
     /// Column headings for the results table.
@@ -106,7 +126,7 @@ impl Ui {
             "PRIMES",
             w = LABEL_WIDTH
         );
-        println!("  {}", self.out.dim(&headings));
+        out!("  {}", self.out.dim(&headings));
     }
 
     /// A finished run, as a row of the results table.
@@ -117,7 +137,7 @@ impl Ui {
             Some(false) => p.red("✗"),
             None => p.yellow("?"),
         };
-        println!(
+        out!(
             "  {:<w$}{:>13}{}{:>12}{:>11} {}",
             run.label,
             group(run.passes),
@@ -172,32 +192,34 @@ impl Ui {
         if runs.iter().any(|run| run.label != best.label) {
             detail = format!("{} · {}", best.label, detail);
         }
-        println!();
-        println!(
+        out!();
+        out!(
             "  {}  {}  {}",
             p.bold("Score"),
             p.green(&p.bold(&format!("{} passes/s", group(best.rate().round() as usize)))),
             p.dim(&format!("({})", detail))
         );
         if runs.iter().any(|run| run.valid == Some(false)) {
-            println!(
+            out!(
                 "  {}",
                 p.red("✗ some runs counted the wrong number of primes")
             );
         }
         if runs.iter().any(|run| run.valid.is_none()) {
-            println!(
+            out!(
                 "  {}",
                 p.yellow("? prime counts are only checked when the limit is a power of 10")
             );
         }
-        println!();
+        out!();
     }
 
     /// Every prime found, in right-aligned columns.
     pub fn primes(&self, limit: usize, primes: &[usize]) {
-        // stop quietly if stdout closes early, e.g. when piped into `head`
-        let _ = self.write_primes(&mut io::BufWriter::new(io::stdout().lock()), limit, primes);
+        let mut out = io::BufWriter::new(io::stdout().lock());
+        if let Err(err) = self.write_primes(&mut out, limit, primes) {
+            stdout_failed(err);
+        }
     }
 
     fn write_primes(&self, out: &mut impl Write, limit: usize, primes: &[usize]) -> io::Result<()> {
