@@ -14,7 +14,7 @@ use ui::Ui;
 mod ui;
 
 pub mod primes {
-    use std::{collections::HashMap, usize};
+    use std::collections::HashMap;
 
     /// Known prime counts, used to check results.
     pub struct PrimeValidator(HashMap<usize, usize>);
@@ -249,7 +249,7 @@ pub mod primes {
         }
 
         fn is_num_flagged(&self, number: usize) -> bool {
-            if number % 2 == 0 {
+            if number.is_multiple_of(2) {
                 return false;
             }
             let index = number / 2;
