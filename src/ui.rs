@@ -340,3 +340,40 @@ fn cpu_model() -> Option<String> {
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     (!name.is_empty()).then_some(name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_adds_thousands_separators() {
+        assert_eq!(group(0), "0");
+        assert_eq!(group(999), "999");
+        assert_eq!(group(1_000), "1,000");
+        assert_eq!(group(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn human_time_picks_a_unit_and_three_digits() {
+        assert_eq!(human_time(2.5), "2.50 s");
+        assert_eq!(human_time(0.0123), "12.3 ms");
+        assert_eq!(human_time(0.000442), "442 µs");
+        assert_eq!(human_time(5e-9), "5.00 ns");
+    }
+
+    #[test]
+    fn primes_are_listed_ten_to_a_line() {
+        let ui = Ui {
+            out: Paint(false),
+            err: Paint(false),
+            live: false,
+        };
+        let mut out = Vec::new();
+        ui.write_primes(&mut out, 37, &[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31])
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "  11 primes up to 37\n   2   3   5   7  11  13  17  19  23  29\n  31\n\n"
+        );
+    }
+}
