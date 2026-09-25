@@ -4,8 +4,10 @@
 //! Results go to stdout and the progress bar to stderr. Colours and the
 //! progress bar are only used on a terminal, and `NO_COLOR` turns colours off.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::process;
 use std::time::Duration;
 
@@ -353,7 +355,8 @@ fn describe_cores(logical: usize, physical: usize, types: Option<(usize, usize)>
     if logical > physical {
         details.push(format!("{} threads", logical));
     }
-    if let Some((performance, efficiency)) = types {
+    // a split that doesn't add up means an unexpected layout, so leave it out
+    if let Some((performance, efficiency)) = types.filter(|&(p, e)| p + e == physical) {
         details.push(format!(
             "{} performance, {} efficiency",
             performance, efficiency
@@ -365,8 +368,12 @@ fn describe_cores(logical: usize, physical: usize, types: Option<(usize, usize)>
     text
 }
 
-/// How many performance and efficiency cores a Mac has, if its chip has both kinds.
+/// How many performance and efficiency cores the CPU has. Macs report this, and so does
+/// Linux for Intel chips with both kinds.
 fn core_types() -> Option<(usize, usize)> {
+    if cfg!(target_os = "linux") {
+        return linux_core_types(Path::new("/sys"));
+    }
     if !cfg!(target_os = "macos") {
         return None;
     }
@@ -390,6 +397,43 @@ fn core_types() -> Option<(usize, usize)> {
     }
 }
 
+/// Performance and efficiency core counts from Linux's `/sys` folder (`sys`). On Intel chips
+/// with both kinds, the kernel lists their CPUs in `devices/cpu_core/cpus` and
+/// `devices/cpu_atom/cpus`, plus `devices/cpu_lowpower/cpus` for the low-power efficiency
+/// cores that some laptop chips have.
+fn linux_core_types(sys: &Path) -> Option<(usize, usize)> {
+    let cores = |kind: &str| -> Option<usize> {
+        let cpus = std::fs::read_to_string(sys.join(format!("devices/{}/cpus", kind))).ok()?;
+        // both threads of a hyper-threaded core list the same siblings, so each core counts once
+        let siblings: BTreeSet<String> = parse_cpu_list(&cpus)?
+            .into_iter()
+            .map(|cpu| {
+                let path = format!(
+                    "devices/system/cpu/cpu{}/topology/thread_siblings_list",
+                    cpu
+                );
+                let list = std::fs::read_to_string(sys.join(path)).ok()?;
+                Some(list.trim().to_string())
+            })
+            .collect::<Option<_>>()?;
+        Some(siblings.len())
+    };
+    let low_power = cores("cpu_lowpower").unwrap_or(0);
+    Some((cores("cpu_core")?, cores("cpu_atom")? + low_power))
+}
+
+/// Expands a Linux CPU list such as "0-3,8" into [0, 1, 2, 3, 8].
+fn parse_cpu_list(list: &str) -> Option<Vec<usize>> {
+    let mut cpus = Vec::new();
+    for part in list.trim().split(',') {
+        match part.split_once('-') {
+            Some((first, last)) => cpus.extend(first.parse::<usize>().ok()?..=last.parse().ok()?),
+            None => cpus.push(part.parse().ok()?),
+        }
+    }
+    Some(cpus)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +447,84 @@ mod tests {
             "11 (5 performance, 6 efficiency)"
         );
         assert_eq!(describe_cores(2, 8, None), "2 available, of 8");
+        assert_eq!(describe_cores(16, 16, Some((6, 8))), "16");
+    }
+
+    #[test]
+    fn parse_cpu_list_expands_ranges() {
+        assert_eq!(parse_cpu_list("0-3,8\n"), Some(vec![0, 1, 2, 3, 8]));
+        assert_eq!(parse_cpu_list("5"), Some(vec![5]));
+        assert_eq!(parse_cpu_list(""), None);
+    }
+
+    #[test]
+    fn linux_core_types_count_cores_not_threads() {
+        // Core Ultra 7 265T: 8 performance and 12 efficiency cores, no hyper-threading
+        let sys = fake_sys(
+            "arrow-lake",
+            &[("cpu_core", "0-7"), ("cpu_atom", "8-19")],
+            |cpu| cpu.to_string(),
+        );
+        assert_eq!(linux_core_types(&sys.0), Some((8, 12)));
+
+        // Core i7-13700: 8 performance cores with 2 threads each, then 8 efficiency cores
+        let sys = fake_sys(
+            "raptor-lake",
+            &[("cpu_core", "0-15"), ("cpu_atom", "16-23")],
+            |cpu| match cpu {
+                0..=15 => format!("{}-{}", cpu / 2 * 2, cpu / 2 * 2 + 1),
+                _ => cpu.to_string(),
+            },
+        );
+        assert_eq!(linux_core_types(&sys.0), Some((8, 8)));
+
+        // Core Ultra 9 285H: 6 performance, 8 efficiency and 2 low-power efficiency cores
+        let sys = fake_sys(
+            "arrow-lake-h",
+            &[
+                ("cpu_core", "0-5"),
+                ("cpu_atom", "6-13"),
+                ("cpu_lowpower", "14-15"),
+            ],
+            |cpu| cpu.to_string(),
+        );
+        assert_eq!(linux_core_types(&sys.0), Some((6, 10)));
+
+        // chips with one kind of core don't have these files
+        assert_eq!(linux_core_types(Path::new("/nonexistent")), None);
+    }
+
+    /// A stand-in for Linux's `/sys` folder, deleted when dropped, even if a test fails.
+    struct FakeSys(std::path::PathBuf);
+
+    impl Drop for FakeSys {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Builds a fake `/sys` folder where `kinds` pairs each core type with its CPU list, and
+    /// `siblings` gives each CPU's siblings list.
+    fn fake_sys(name: &str, kinds: &[(&str, &str)], siblings: impl Fn(usize) -> String) -> FakeSys {
+        let sys =
+            FakeSys(env::temp_dir().join(format!("prime-race-sys-{}-{}", name, process::id())));
+        for (kind, cpus) in kinds {
+            let pmu = sys.0.join(format!("devices/{}", kind));
+            std::fs::create_dir_all(&pmu).unwrap();
+            std::fs::write(pmu.join("cpus"), format!("{}\n", cpus)).unwrap();
+            for cpu in parse_cpu_list(cpus).unwrap() {
+                let topology = sys
+                    .0
+                    .join(format!("devices/system/cpu/cpu{}/topology", cpu));
+                std::fs::create_dir_all(&topology).unwrap();
+                std::fs::write(
+                    topology.join("thread_siblings_list"),
+                    format!("{}\n", siblings(cpu)),
+                )
+                .unwrap();
+            }
+        }
+        sys
     }
 
     #[test]
