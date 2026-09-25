@@ -1,9 +1,16 @@
 [package]
 name = "eratos"
 version = "0.1.1"
-description = "A CPU benchmark built on the Sieve of Eratosthenes"
 edition = "2021"
+
+authors = ["Alexander Alexandrov"]
+description = "A CPU benchmark built on the Sieve of Eratosthenes"
 license = "BSD-3-Clause"
+repository = "https://github.com/alexylon/eratos"
+documentation = "https://docs.rs/eratos"
+keywords = ["benchmark", "cpu", "primes", "sieve", "eratosthenes"]
+categories = ["command-line-utilities"]
+exclude = [".claude/", "CLAUDE.md"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
