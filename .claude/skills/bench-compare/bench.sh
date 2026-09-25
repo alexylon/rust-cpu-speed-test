@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compare prime_race_rust passes/s between two versions of the code.
+# Compare Eratos passes/s between two versions of the code.
 #
 #   bench.sh [base-ref [new-ref]] [run flags...]
 #
@@ -46,8 +46,13 @@ if git -C "$repo" diff --quiet "$base" ${new:+"$new"} -- src Cargo.toml Cargo.lo
 fi
 
 # one work dir per checkout, outside it, and kept between runs so builds can reuse it
-work="${TMPDIR:-/tmp}/prime-race-bench/$(printf '%s' "$repo" | cksum | cut -d ' ' -f 1)"
+work="${TMPDIR:-/tmp}/eratos-bench/$(printf '%s' "$repo" | cksum | cut -d ' ' -f 1)"
 mkdir -p "$work"
+
+# binary_name DIR: the binary's name, read from DIR/Cargo.toml as it differs between commits
+binary_name() {
+  awk -F '"' '/^name = / { print $2; exit }' "$1/Cargo.toml"
+}
 
 # build_ref REF NAME: builds a commit without touching the working tree
 build_ref() {
@@ -60,7 +65,7 @@ build_ref() {
     cp "$repo/Cargo.lock" "$work/$2-src/"
   fi
   cargo build --release --quiet --manifest-path "$work/$2-src/Cargo.toml" --target-dir "$work/$2-target"
-  cp "$work/$2-target/release/prime_race_rust" "$work/$2"
+  cp "$work/$2-target/release/$(binary_name "$work/$2-src")" "$work/$2"
 }
 
 # code_sum BINARY: prints a checksum of its machine code, if there's a tool to read it
@@ -79,7 +84,7 @@ if [ -n "$new" ]; then
 else
   cargo build --release --quiet --manifest-path "$repo/Cargo.toml" --target-dir "$repo/target"
   # a copy, so a rebuild during the run can't replace it
-  cp "$repo/target/release/prime_race_rust" "$work/new"
+  cp "$repo/target/release/$(binary_name "$repo")" "$work/new"
 fi
 same_code=""
 base_code=$(code_sum "$work/base" || true)

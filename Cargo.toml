@@ -1,6 +1,7 @@
 [package]
-name = "prime_race_rust"
-version = "0.1.0"
+name = "eratos"
+version = "0.1.1"
+description = "A CPU benchmark built on the Sieve of Eratosthenes"
 edition = "2021"
 license = "BSD-3-Clause"
 

@@ -77,11 +77,7 @@ impl Ui {
             |name: &str, value: String| out!("  {}  {}", p.dim(&format!("{:<8}", name)), value);
 
         out!();
-        out!(
-            "  {}  {}",
-            p.bold("CPU Speed Test"),
-            p.dim("prime sieve benchmark")
-        );
+        out!("  {}  {}", p.bold("Eratos"), p.dim("prime sieve benchmark"));
         out!();
         field(
             "CPU",

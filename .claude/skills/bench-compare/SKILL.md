@@ -1,10 +1,10 @@
 ---
 name: bench-compare
-description: Measure whether a change made the prime sieve benchmark faster or slower, by building two versions (a git ref and the working tree, or two refs) in release mode and running them in turn with a noise estimate. Use this whenever the user asks if something is faster, slower, a speedup or a regression, wants before/after numbers, or after changing the sieve, a storage variant, the run loop or the release profile, even if they only say "check performance" or "benchmark it". A single run of the app proves nothing, as runs vary by a few percent.
+description: Measure whether a change made Eratos faster or slower, by building two versions (a git ref and the working tree, or two refs) in release mode and running them in turn with a noise estimate. Use this whenever the user asks if something is faster, slower, a speedup or a regression, wants before/after numbers, or after changing the sieve, a storage variant, the run loop or the release profile, even if they only say "check performance" or "benchmark it". A single run of the app proves nothing, as runs vary by a few percent.
 argument-hint: "[base ref] [new ref] [run flags]"
 ---
 
-# Compare benchmark scores
+# Compare Eratos benchmark scores
 
 Compare passes/s between two versions of the code. Arguments: $ARGUMENTS
 

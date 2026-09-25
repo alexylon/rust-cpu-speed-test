@@ -2,11 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A CPU benchmark: each thread runs a prime sieve over and over for a fixed time, and the score is total sieve passes per second.
+Eratos is a CPU benchmark: each thread runs a prime sieve over and over for a fixed time, and the score is total sieve passes per second.
 
 ## Commands
 
-- The binary is `prime_race_rust`, not the repo name: `cargo run --release -- <flags>`.
+- The binary is `eratos`: `cargo run --release -- <flags>`.
 - Only `--release` numbers mean anything; debug builds run ~6x slower.
 - A default run pins every logical core for ~6 s (1 s settle + 5 s) and runs only the striped variant.
 - Quick check of all four storage variants: `cargo run --release -- -s 1 -t 1 --bytes --bits --bits-rotate --bits-striped`. Every row should end in ✓.

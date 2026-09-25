@@ -294,7 +294,7 @@ pub mod primes {
     }
 }
 
-/// Measure CPU speed by counting primes with a multi-threaded sieve.
+/// Eratos measures CPU speed with a multi-threaded Sieve of Eratosthenes.
 #[derive(Parser, Debug)]
 #[command(version, styles = HELP_STYLES)]
 struct CommandLineOptions {
