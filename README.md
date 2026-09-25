@@ -2,16 +2,25 @@
 
 Eratos is a command-line CPU benchmark written in Rust. It repeatedly finds prime numbers using the Sieve of Eratosthenes and reports how many complete passes it runs per second.
 
-## Build and run
+## Install and run
 
-Install [Rust and Cargo](https://rust-lang.org/tools/install/) if needed, then run these commands from the project directory:
+Install [Rust and Cargo](https://rust-lang.org/tools/install/) if needed, then run:
+
+```sh
+cargo install eratos
+eratos
+```
+
+This downloads Eratos from crates.io, builds a release version and adds the `eratos` command to your path.
+
+To build from source instead, run these commands from the project directory:
 
 ```sh
 cargo build --release
 ./target/release/eratos
 ```
 
-On Windows, run `.\target\release\eratos.exe` instead. Use a release build for benchmarking; debug builds are much slower.
+On Windows, run `.\target\release\eratos.exe` instead. Use a release build for benchmarking; debug builds are much slower. In the examples below, replace `eratos` with the path to the program you built.
 
 The default test runs for five seconds, finding primes below 1,000,000. It uses all available CPU threads and the striped storage variant. Allow about six seconds in total, including a one-second pause before the test.
 
@@ -19,13 +28,13 @@ The default test runs for five seconds, finding primes below 1,000,000. It uses 
 
 ```sh
 # Use one CPU thread
-./target/release/eratos --threads 1
+eratos --threads 1
 
 # Run three 10-second tests with four threads
-./target/release/eratos --threads 4 --seconds 10 --repetitions 3
+eratos --threads 4 --seconds 10 --repetitions 3
 
 # Show all options
-./target/release/eratos --help
+eratos --help
 ```
 
 | Option | What it changes | Default |
@@ -39,7 +48,7 @@ The default test runs for five seconds, finding primes below 1,000,000. It uses 
 Eratos includes four variants that store the sieve's working data differently. With no variant flags, it runs `--bits-striped`. To run all four:
 
 ```sh
-./target/release/eratos --bytes --bits --bits-rotate --bits-striped
+eratos --bytes --bits --bits-rotate --bits-striped
 ```
 
 You can select any combination of those flags. Each selected variant runs for the chosen duration and number of repetitions, with a one-second pause before its first run.
